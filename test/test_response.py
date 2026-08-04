@@ -464,6 +464,45 @@ class TestResponse(object):
             next(reader)
         assert re.match("I/O operation on closed file.?", str(ctx.value))
 
+    def test_read_with_illegal_mix_decode_toggle(self):
+        compress = zlib.compressobj(6, zlib.DEFLATED, -zlib.MAX_WBITS)
+        data = compress.compress(b"foo")
+        data += compress.flush()
+
+        fp = BytesIO(data)
+
+        resp = HTTPResponse(
+            fp, headers={"content-encoding": "deflate"}, preload_content=False
+        )
+
+        # ``amt`` is counted in compressed bytes, so ask for everything but the
+        # final byte: that decodes "foo" while leaving data to be read again.
+        assert resp.read(len(data) - 1) == b"foo"
+
+        with pytest.raises(
+            RuntimeError,
+            match=(
+                r"Calling read\(decode_content=False\) is not supported after "
+                r"read\(decode_content=True\) was called"
+            ),
+        ):
+            resp.read(1, decode_content=False)
+
+    def test_read_with_mix_decode_toggle(self):
+        compress = zlib.compressobj(6, zlib.DEFLATED, -zlib.MAX_WBITS)
+        data = compress.compress(b"foo")
+        data += compress.flush()
+
+        fp = BytesIO(data)
+
+        resp = HTTPResponse(
+            fp, headers={"content-encoding": "deflate"}, preload_content=False
+        )
+        # Skipping the first compressed byte leaves a stream that still decodes,
+        # so toggling decoding back on afterwards is allowed.
+        resp.read(1, decode_content=False)
+        assert resp.read(decode_content=True) == b"oo"
+
     def test_streaming(self):
         fp = BytesIO(b"foo")
         resp = HTTPResponse(fp, preload_content=False)
